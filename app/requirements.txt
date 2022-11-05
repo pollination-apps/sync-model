@@ -1,7 +1,6 @@
 pollination-streamlit>=0.5.0
 pollination-streamlit-io
 pollination-streamlit-viewer
-
 lbt-honeybee
-
 ladybug-vtk
+streamlit-aggrid
