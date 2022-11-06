@@ -6,10 +6,7 @@ from honeybee.model import Model
 from ladybug_display.geometry3d import DisplayFace3D
 from ladybug_display.visualization import ContextGeometry, VisualizationSet
 
-from pandas import DataFrame
-from st_aggrid import AgGrid, GridOptionsBuilder
-
-from pollination_streamlit_io import send_results, get_hbjson, select_cloud_artifact
+from pollination_streamlit_io import send_results, get_hbjson
 
 project_owner = 'ladybug-tools'
 project_name = 'sync-model'
@@ -102,12 +99,23 @@ def run_comparison():
         button_holder.write('')
 
 
-def vis_set_from_changes(changed_objects):
-    """Get DisplayFace3D from a sub-section of the ComparisonReport"""
+def update_vis_set():
+    """Update the visualization set with new selection."""
+    if st.session_state.comparison_report is None or 'changed_objects' \
+            not in st.session_state.comparison_report:
+        return
+
+    vis_objects = []
+    if 'changed_objects' in st.session_state.comparison_report:
+        changed = st.session_state.comparison_report['changed_objects']
+        for change in changed:
+            st_var = st.session_state['{}_preview'.format(change['element_id'])]
+            if st_var:
+                vis_objects.extend(change['geometry'])
     faces = []
-    for changes in changed_objects:
-        faces.extend([DisplayFace3D.from_dict(geo) for geo in changes['geometry']])
-    st.session_state['vis_set'] = VisualizationSet(
+    for vo in vis_objects:
+        faces.append(DisplayFace3D.from_dict(vo))
+    st.session_state.vis_set = VisualizationSet(
         'preview_objects', [ContextGeometry('preview_objects', faces)]
     )
 
@@ -121,43 +129,47 @@ def build_tables():
     if 'changed_objects' in st.session_state.comparison_report:
         st.write('## Changed Objects')
         changed = st.session_state.comparison_report['changed_objects']
-        columns=['element_id', 'element_type', 'element_name']
-
-        changed_data = DataFrame(data=changed, columns=columns)
-
-        gb_changed = GridOptionsBuilder.from_dataframe(changed_data)
-        gb_changed.configure_selection('multiple', use_checkbox=True)
-        grid_options_changed = gb_changed.build()
-
-        AgGrid(
-            changed_data,
-            gridOptions=grid_options_changed,
-            fit_columns_on_grid_load=True,
-            update_on=['rowSelected'],
-            key='changed_aggrid'
-        )
-        vis_set_from_changes(changed)
+        col_names = ['**Preview**', '**Name**', '**Type**', '**Geometry**', '**Energy**']
+        columns = st.columns([1, 2, 1, 1, 1])
+        for name, col in zip(col_names, columns):
+            col.write(name)
+        for change in changed:
+            col_0, col_1, col_2, col_3, col_4 = st.columns([1, 2, 1, 1, 1])
+            col_0.checkbox(
+                key='{}_preview'.format(change['element_id']), label='',
+                value=False, on_change=update_vis_set)
+            col_1.write(change['element_name'])
+            col_2.write(change['element_type'])
+            dis_geo = not change['geometry_changed']
+            col_3.checkbox(
+                key='{}_geo'.format(change['element_id']), label='',
+                value=False, disabled=dis_geo)
+            dis_en = not change['energy_changed']
+            col_4.checkbox(
+                key='{}_energy'.format(change['element_id']), label='',
+                value=False, disabled=dis_en)
 
 
 def preview_vis_set():
     """Preview any VisualizationSets created from the selection table."""
+    preview_opt = {
+        'add': False,
+        'delete': False,
+        'preview': False,
+        'clear': True,
+        'subscribe-preview': True
+    }
     if st.session_state.vis_set is None:
-        return
-
-    # if there's a VisualizationSet from the table, then preview it
-    send_results(
-        'send-results',
-        results=st.session_state['vis_set'].to_dict(),
-        option='subscribe-preview',
-        options={
-            'add': False,
-            'delete': False,
-            'preview': False,
-            'clear': True,
-            'subscribe-preview': True
-        },
-        label='Preview Selection'
-    )
+        send_results(
+            key='send-results', results=[],
+            option='subscribe-preview',
+            options=preview_opt, label='Preview Selection')
+    else:
+        send_results(
+            key='send-results', results=st.session_state['vis_set'].to_dict(),
+            option='subscribe-preview',
+            options=preview_opt, label='Preview Selection'
+        )
 
 
 # run the main steps of the app
