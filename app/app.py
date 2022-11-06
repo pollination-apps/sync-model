@@ -1,179 +1,53 @@
-import os, requests, json
+import uuid, json
+from pathlib import Path
 import streamlit as st
 from honeybee.model import Model
 
 from ladybug_display.geometry3d import DisplayFace3D
 from ladybug_display.visualization import ContextGeometry, VisualizationSet
 
-import ladybug_vtk
+from pollination_streamlit_io import send_results, get_hbjson
 
-from pollination_streamlit_viewer import viewer
-from pollination_streamlit.selectors import get_api_client
-
-from pandas import DataFrame
-from st_aggrid import AgGrid, GridOptionsBuilder
-
-from pollination_streamlit_io import send_results, get_hbjson, select_cloud_artifact
-
-api_client = get_api_client()
 project_owner = 'ladybug-tools'
 project_name = 'sync-model'
-st.header('Sync Model App!')
+st.header('Sync Model!')
 
 def initialize():
     """Initialize all of the session state variables"""
-    if 'hbjson-a' not in st.session_state:
-        st.session_state['hbjson-a'] = None
-    if 'hbjson-b' not in st.session_state:
-        st.session_state['hbjson-b'] = None
-    if 'vis-set' not in st.session_state:
-        st.session_state['vis-set'] = None
-    if 'changed' not in st.session_state:
-        st.session_state['changed'] = []
-    if 'added' not in st.session_state:
-        st.session_state['added'] = []
-    if 'deleted' not in st.session_state:
-        st.session_state['deleted'] = []
+    # user session
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())[:8]
+    if 'target_folder' not in st.session_state:
+        st.session_state.target_folder = Path(__file__).parent
+    # model session
+    if 'hb_model_a' not in st.session_state:
+        st.session_state['hb_model_a'] = None
+    if 'hb_model_b' not in st.session_state:
+        st.session_state['hb_model_b'] = None
+    if 'comparison_report' not in st.session_state:
+        st.session_state['comparison_report'] = None
+    if 'vis_set' not in st.session_state:
+        st.session_state['vis_set'] = None
+    if 'synced_model' not in st.session_state:
+        st.session_state['synced_model'] = None
+
+    if 'default_preview_chng' not in st.session_state:
+        st.session_state['default_preview_chng'] = False
 
 
-initialize()
+def new_model_a():
+    """Process a newly set Honeybee Model A file."""
+    st.session_state.comparison_report = None
+    data=st.session_state.synced_model = None
+    if 'hbjson' in st.session_state['hbjson_a_data']:
+        hbjson_data = st.session_state['hbjson_a_data']['hbjson']
+        st.session_state.hb_model = Model.from_dict(hbjson_data)
 
 
-st.checkbox(
-    'Ignore Added',
-    value=False,
-    key='ignore-added-toggle'
-)
-
-st.checkbox(
-    'Ignore Deleted',
-    value=False,
-    key='ignore-deleted-toggle'
-)
-
-@st.cache
-def get_artifact_hbjson(signed_url):
-    """Get a HBJSON from Pollination platform"""
-    response = requests.get(signed_url, headers=api_client.headers)
-
-    if response.status_code is 200:
-        return json.loads(response.content)
-    else :
-        return '{}'
-
-
-def generate_face_3d_from_changes(changed_objects):
-    """Get DisplayFace3D from a sub-section of the ComparisonReport"""
-    
-    if changed_objects is None:
-        return
-    
-    faces = []
-    for changes in changed_objects:
-        faces.extend([DisplayFace3D.from_dict(geo) for geo in changes['geometry']])
-    return faces
-
-def get_geometry(
-  id_filter = []
-):
-    """Get the geometry associated with a particular change type."""
-
-    objects = []
-
-    objects.extend([
-      change for change in st.session_state['changed'] if len(id_filter) == 0 or change['element_id'] in id_filter
-    ])
-
-    objects.extend([
-      change for change in st.session_state['added'] if len(id_filter) == 0 or change['element_id'] in id_filter
-    ])
-
-    objects.extend([
-      change for change in st.session_state['deleted'] if len(id_filter) == 0 or change['element_id'] in id_filter
-    ])
-
-    return generate_face_3d_from_changes(changed_objects=objects)
-
-def recreate_vis_set(geometry):
-    if not geometry:
-        return
-
-    st.session_state['vis-set'] = VisualizationSet(
-      'id',
-      [
-        ContextGeometry(
-          'id',
-          geometry
-        )
-      ]
-    )
-
-def recreate_comparison_report(model_a, model_b):
-    """Generate a ComparisonReport between two models."""
-    comparison_report = model_a.comparison_report(
-      model_b,
-      ignore_deleted=st.session_state['ignore-deleted-toggle'],
-      ignore_added=st.session_state['ignore-added-toggle']
-    )
-    if comparison_report is None: 
-        return
-
-    st.session_state['changed'] = comparison_report['changed_objects']
-    st.session_state['added'] = comparison_report['added_objects'] \
-        if 'added_objects' in comparison_report else []
-    st.session_state['deleted'] = comparison_report['deleted_objects'] \
-        if 'deleted_objects' in comparison_report else []
-
-    geometry = get_geometry()
-
-    recreate_vis_set(geometry)
-
-    return comparison_report
-
-# get model_a
-def handle_get_hbjson():
-    """Get the base Model from the CAD plugin."""
-    hbjson = st.session_state['get-hbjson-a']
-
-    model = Model.from_dict(hbjson['hbjson'])
-    st.session_state['hbjson-a'] = model
-
-    if model is not None and st.session_state['hbjson-b'] is not None:
-        recreate_comparison_report(model, st.session_state['hbjson-b'])
-
-# get model_b
-# Fetch the artifact contents on selection
-def handle_sel_artifact_hbjson():
-    """Get the changed HBJSON from the cloud or a file."""
-    artifact = st.session_state['get-hbjson-b']
-    
-    if artifact is None:
-        st.session_state['hbjson'] = None
-        return
-    
-    request_params = {
-      'path': artifact['key']
-    }
-
-    request_path = [
-        'projects',
-        project_owner,
-        project_name,
-        'artifacts'
-    ]
-    url = "/".join(request_path)
-
-    signed_url = api_client.get(path=f'/{url}/download', params=request_params)
-
-    model = Model.from_dict(get_artifact_hbjson(signed_url))
-    st.session_state['hbjson-b'] = model
-
-    if st.session_state['hbjson-a'] is not None and model is not None:
-        recreate_comparison_report(st.session_state['hbjson-a'], model)
-
-get_hbjson(
-  'get-hbjson-a',
-  options={
+def get_model_a():
+    """Get the base Model from the CAD environment or upload."""
+    hbjson_data = get_hbjson(
+        label='Get Base Model', key='hbjson_a_data', on_change=new_model_a, options={
             "subscribe" : {
                 "show": False,
                 "selected": False
@@ -182,110 +56,199 @@ get_hbjson(
                 "show": True,
                 "selected": False
             }
-        },
-  on_change=handle_get_hbjson,
-)
+        })
+    if st.session_state.hb_model_a is None and hbjson_data is not None \
+            and 'hbjson' in hbjson_data:
+        st.session_state.hb_model_a = Model.from_dict(hbjson_data['hbjson'])
 
-select_cloud_artifact(
-    'get-hbjson-b',
-    api_client,
-    project_name=project_name,
-    project_owner=project_owner,
-    study_id='',
-    file_name_match='.*hbjson',
-    on_change=handle_sel_artifact_hbjson
-)
 
-st.info('Compare a model from Rhino with a model from Pollination Cloud.')
+def new_model_b():
+    """Process a newly set Honeybee Model B file."""
+    st.session_state.comparison_report = None
+    data=st.session_state.synced_model = None
+    hbjson_b_file = st.session_state.hbjson_b_data
+    if hbjson_b_file:
+        # save the HBJSON to a file
+        hbjson_b_path = Path(
+            f'./{st.session_state.target_folder}/data/'
+            f'{st.session_state.user_id}/{hbjson_b_file.name}'
+        )
+        hbjson_b_path.parent.mkdir(parents=True, exist_ok=True)
+        hbjson_b_path.write_bytes(hbjson_b_file.read())
+        # load the model from the file
+        st.session_state.hb_model_b = Model.from_file(hbjson_b_path.as_posix())
+    else:
+        st.session_state.hb_model_b = None
 
-columns=['element_id', 'element_type', 'element_name']
 
-# changed
-if len(st.session_state['changed']) > 0:
-    changed_data = DataFrame(
-      data=st.session_state['changed'],
-      columns=columns
+def get_model_b():
+    """Get the updated model with changes for comparison."""
+    st.file_uploader(
+        'Get Comparison Model', type=['hbjson', 'json'],
+        key='hbjson_b_data', on_change=new_model_b,
+        help='Select a Model file to be compared to the first model.')
+
+
+def run_comparison():
+    """Generate the ComparisonReport between the two models."""
+    # check to be sure there is a model
+    model_a, model_b = st.session_state.hb_model_a, st.session_state.hb_model_b
+    if not model_a or not model_b or st.session_state.comparison_report is not None:
+        return
+
+    # run the report if the button is pressed
+    button_holder = st.empty()
+    if button_holder.button('Run Comparison'):
+        comp_report = model_a.comparison_report(model_b)
+        st.session_state.comparison_report = comp_report
+        button_holder.write('')
+
+
+def update_vis_set():
+    """Update the visualization set with new selection."""
+    if st.session_state.comparison_report is None or 'changed_objects' \
+            not in st.session_state.comparison_report:
+        return
+
+    vis_objects = []
+    if 'changed_objects' in st.session_state.comparison_report:
+        changed = st.session_state.comparison_report['changed_objects']
+        for change in changed:
+            st_var = st.session_state['{}_preview'.format(change['element_id'])]
+            if st_var:
+                vis_objects.extend(change['geometry'])
+    faces = []
+    for vo in vis_objects:
+        faces.append(DisplayFace3D.from_dict(vo))
+    st.session_state.vis_set = VisualizationSet(
+        'preview_objects', [ContextGeometry('preview_objects', faces)]
     )
 
-    gb_changed = GridOptionsBuilder.from_dataframe(changed_data)
-    gb_changed.configure_selection('multiple', use_checkbox=True)
-    grid_options_changed = gb_changed.build()
 
-    AgGrid(
-      changed_data,
-      gridOptions=grid_options_changed,
-      fit_columns_on_grid_load=True,
-      key='changed-aggrid'
-    )
-
-# added
-if len(st.session_state['added']) > 0:
-
-    added_data = DataFrame(
-      data=st.session_state['added'],
-      columns=columns
-    )
-
-    gb_added = GridOptionsBuilder.from_dataframe(added_data)
-    gb_added.configure_selection('multiple', use_checkbox=True)
-    grid_options_added = gb_added.build()
-
-    AgGrid(
-      added_data,
-      gridOptions=grid_options_added,
-      fit_columns_on_grid_load=True,
-      key='added-aggrid'
-    )
-
-# deleted
-if len(st.session_state['deleted']) > 0:
-
-    deleted_data = DataFrame(
-      data=st.session_state['deleted'],
-      columns=columns
-    )
-
-    gb_deleted = GridOptionsBuilder.from_dataframe(deleted_data)
-    gb_deleted.configure_selection('multiple', use_checkbox=True)
-    grid_options_deleted = gb_deleted.build()
-
-    AgGrid(
-      deleted_data,
-      gridOptions=grid_options_deleted,
-      fit_columns_on_grid_load=True,
-      key='deleted-aggrid'
-    )
-
-id_filter = []
-
-if 'changed-aggrid' in st.session_state and st.session_state['changed-aggrid'] is not None:
-    # st.json(st.session_state['changed-aggrid'], expanded=False)
-    id_filter.extend([c['element_id'] for c in st.session_state['changed-aggrid']['selectedRows']])
-
-if 'added-aggrid' in st.session_state and st.session_state['added-aggrid'] is not None:
-    # st.json(st.session_state['added-aggrid'], expanded=False)
-    id_filter.extend([c['element_id'] for c in st.session_state['added-aggrid']['selectedRows']])
-
-if 'deleted-aggrid' in st.session_state and st.session_state['deleted-aggrid'] is not None:
-    # st.json(st.session_state['deleted-aggrid'], expanded=False)
-    id_filter.extend([c['element_id'] for c in st.session_state['deleted-aggrid']['selectedRows']])
+def setup_select_all(container):
+    """Setup check boxes to select all values."""
+    if st.session_state.comparison_report is None or 'changed_objects' not in \
+            st.session_state.comparison_report:
+        return
+    col_0, _, _, col_3, col_4 = container.columns([1, 2, 1, 1, 1])
+    col_0.checkbox(key='preview_chng', label='Changed', value=True)
+    col_3.checkbox(key='geo_all', label='All', value=True)
+    col_4.checkbox(key='energy_all', label='All', value=True)
 
 
-st.write(id_filter)
+def build_changes_tables(table_container):
+    """Build the tables of model differences from the comparison report."""
+    if st.session_state.comparison_report is None:
+        return
+    
+    # build up a table of all the changed objects
+    if 'changed_objects' in st.session_state.comparison_report:
+        # write the top row with the labels
+        table_container.write('## Changed Objects')
+        changed = st.session_state.comparison_report['changed_objects']
+        col_names = ['**Preview**', '**Name**', '**Type**', '**Geometry**', '**Energy**']
+        columns = table_container.columns([1, 2, 1, 1, 1])
+        for name, col in zip(col_names, columns):
+            col.write(name)
+        # write a row for each change detected in the model
+        for change in changed:
+            col_0, col_1, col_2, col_3, col_4 = table_container.columns([1, 2, 1, 1, 1])
+            def_prev_val = change['geometry_changed'] \
+                if st.session_state.preview_chng else False
+            col_0.checkbox(
+                key='{}_preview'.format(change['element_id']), label='',
+                value=def_prev_val, on_change=update_vis_set)
+            col_1.write(change['element_name'])
+            col_2.write(change['element_type'])
+            dis_geo = not change['geometry_changed']
+            def_accept_geo = st.session_state.geo_all
+            col_3.checkbox(
+                key='{}_geo'.format(change['element_id']), label='',
+                value=def_accept_geo, disabled=dis_geo)
+            dis_en = not change['energy_changed']
+            def_accept_energy = st.session_state.energy_all
+            col_4.checkbox(
+                key='{}_energy'.format(change['element_id']), label='',
+                value=def_accept_energy, disabled=dis_en)
 
-geometry = get_geometry(id_filter)
-recreate_vis_set(geometry)
+        if st.session_state.preview_chng != st.session_state.default_preview_chng:
+            update_vis_set()
+            st.session_state.default_preview_chng = st.session_state.preview_chng
 
-send_results(
-    'send-results',
-    results=st.session_state['vis-set'].to_dict() if st.session_state['vis-set'] is not None else '{}',
-    option='subscribe-preview',
-    options={
+
+def build_merged_model():
+    """Build the merged model from the sync instructions."""
+    # check to be sure there is a model
+    if st.session_state.comparison_report is None:
+        return
+
+    # run the report if the button is pressed
+    button_holder = st.empty()
+    if button_holder.button('Merge Models'):
+        # generate the SyncInstructions
+        sync_instructions = {}
+        if 'changed_objects' in st.session_state.comparison_report:
+            changed = st.session_state.comparison_report['changed_objects']
+            sync_changes = []
+            for change in changed:
+                up_geo = st.session_state['{}_geo'.format(change['element_id'])]
+                up_energy = st.session_state['{}_energy'.format(change['element_id'])]
+                sync_obj = {
+                    'element_id': change['element_id'],
+                    'element_name': change['element_name'],
+                    'element_type': change['element_type'],
+                    'update_geometry': up_geo,
+                    'update_energy': up_energy
+                }
+                sync_changes.append(sync_obj)
+            sync_instructions['changed_objects'] = sync_changes
+
+        # generate the merged model with the instructions
+        button_holder.write('')
+        new_model = Model.from_sync(
+            st.session_state.hb_model_a, st.session_state.hb_model_b, sync_instructions)
+        st.session_state.synced_model = json.dumps(new_model.to_dict())
+    
+    if st.session_state.synced_model:
+        st.download_button(
+            label='Get Synced Model', data=st.session_state.synced_model,
+            file_name='synced_model.hbjson')
+
+
+def preview_vis_set():
+    """Preview any VisualizationSets created from the selection table."""
+    preview_opt = {
         'add': False,
         'delete': False,
         'preview': False,
         'clear': True,
         'subscribe-preview': True
-    },
-    label='Preview Changes'
-)
+    }
+    if st.session_state.vis_set is None:
+        send_results(
+            key='send-results', results=[],
+            option='subscribe-preview',
+            options=preview_opt, label='Preview Selection')
+    else:
+        send_results(
+            key='send-results', results=st.session_state['vis_set'].to_dict(),
+            option='subscribe-preview',
+            options=preview_opt, label='Preview Selection'
+        )
+
+
+# initialize variables and run the comparison
+initialize()
+get_model_a()
+get_model_b()
+run_comparison()
+
+# generate tables of changed objects
+change_table_container = st.container()  # container to hold the table
+change_sel_all_container = st.container()  # container to hold the tables
+setup_select_all(change_sel_all_container)
+build_changes_tables(change_table_container)
+
+# build a new model and manage the Rhino scene preview
+build_merged_model()
+preview_vis_set()
