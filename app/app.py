@@ -26,17 +26,14 @@ def initialize():
         st.session_state['hbjson-a'] = None
     if 'hbjson-b' not in st.session_state:
         st.session_state['hbjson-b'] = None
-    # preview hbjson from pollination-cloud
-    # if 'vtkjs-b' not in st.session_state:
-    #     st.session_state['vtkjs-b'] = None
     if 'vis-set' not in st.session_state:
         st.session_state['vis-set'] = None
     if 'changed' not in st.session_state:
-        st.session_state['changed'] = None
+        st.session_state['changed'] = []
     if 'added' not in st.session_state:
-        st.session_state['added'] = None
+        st.session_state['added'] = []
     if 'deleted' not in st.session_state:
-        st.session_state['deleted'] = None
+        st.session_state['deleted'] = []
 
 
 initialize()
@@ -67,31 +64,49 @@ def get_artifact_hbjson(signed_url):
 
 def generate_face_3d_from_changes(changed_objects):
     """Get DisplayFace3D from a sub-section of the ComparisonReport"""
+    
+    if changed_objects is None:
+        return
+    
     faces = []
     for changes in changed_objects:
         faces.extend([DisplayFace3D.from_dict(geo) for geo in changes['geometry']])
     return faces
 
-
-def get_geometry(change_type):
+def get_geometry(
+  id_filter = []
+):
     """Get the geometry associated with a particular change type."""
-    if change_type == 'Changed' and st.session_state['changed'] is not None:
-        # id_filter = st.session_state['changed-aggrid']['selectedRows'] if st.session_state['changed-aggrid'] is not None else None
-        # filtered = [change in st.session_state['changed'] if change['id']]
-        return generate_face_3d_from_changes(
-          changed_objects=st.session_state['changed']
-        )
-    elif change_type == 'Added' and st.session_state['added'] is not None:
-        return generate_face_3d_from_changes(
-          changed_objects=st.session_state['added']
-        )
-    elif change_type == 'Deleted' and st.session_state['deleted'] is not None:
-        return generate_face_3d_from_changes(
-          changed_objects=st.session_state['deleted']
-        )
-    else:
-        return []
 
+    objects = []
+
+    objects.extend([
+      change for change in st.session_state['changed'] if len(id_filter) == 0 or change['element_id'] in id_filter
+    ])
+
+    objects.extend([
+      change for change in st.session_state['added'] if len(id_filter) == 0 or change['element_id'] in id_filter
+    ])
+
+    objects.extend([
+      change for change in st.session_state['deleted'] if len(id_filter) == 0 or change['element_id'] in id_filter
+    ])
+
+    return generate_face_3d_from_changes(changed_objects=objects)
+
+def recreate_vis_set(geometry):
+    if not geometry:
+        return
+
+    st.session_state['vis-set'] = VisualizationSet(
+      'id',
+      [
+        ContextGeometry(
+          'id',
+          geometry
+        )
+      ]
+    )
 
 def recreate_comparison_report(model_a, model_b):
     """Generate a ComparisonReport between two models."""
@@ -109,15 +124,9 @@ def recreate_comparison_report(model_a, model_b):
     st.session_state['deleted'] = comparison_report['deleted_objects'] \
         if 'deleted_objects' in comparison_report else []
 
-    st.session_state['vis-set'] = VisualizationSet(
-      'id',
-      [
-        ContextGeometry(
-          'id',
-          get_geometry(st.session_state['change-type'])
-        )
-      ]
-    )
+    geometry = get_geometry()
+
+    recreate_vis_set(geometry)
 
     return comparison_report
 
@@ -159,7 +168,7 @@ def handle_sel_artifact_hbjson():
     model = Model.from_dict(get_artifact_hbjson(signed_url))
     st.session_state['hbjson-b'] = model
 
-    if st.session_state['hbjson-a'] is not None:
+    if st.session_state['hbjson-a'] is not None and model is not None:
         recreate_comparison_report(st.session_state['hbjson-a'], model)
 
 get_hbjson(
@@ -189,53 +198,10 @@ select_cloud_artifact(
 
 st.info('Compare a model from Rhino with a model from Pollination Cloud.')
 
-def handle_type_change():
-    change_type = st.session_state['change-type']
-    st.write(change_type)
+columns=['element_id', 'element_type', 'element_name']
 
-    st.session_state['vis-set'] = VisualizationSet(
-      'id',
-      [
-        ContextGeometry(
-          'id',
-          get_geometry(change_type)
-        )
-      ]
-    )
-
-st.selectbox(
-    'Change Type',
-    ['Changed', 'Added', 'Deleted'],
-    key='change-type',
-    index=0,
-    on_change=handle_type_change
-)
-
-send_results(
-    'send-results',
-    results=st.session_state['vis-set'].to_dict() if st.session_state['vis-set'] is not None else '{}',
-    option='subscribe-preview',
-    options={
-        'add': False,
-        'delete': False,
-        'preview': False,
-        'clear': True,
-        'subscribe-preview': True
-    },
-    label='Preview Changes'
-)
-
-# if vis_set is not None:
-#     vtkjs = vis_set.to_vtkjs('{}/temp'.format(os.path.dirname(__file__)))
-
-# viewer = viewer(
-#   'pollination-viewer',
-#   content = st.session_state['vktjs-b]
-# )
-
-if st.session_state['changed'] is not None:
-    columns=['element_id', 'element_type', 'element_name']
-
+# changed
+if len(st.session_state['changed']) > 0:
     changed_data = DataFrame(
       data=st.session_state['changed'],
       columns=columns
@@ -252,9 +218,9 @@ if st.session_state['changed'] is not None:
       key='changed-aggrid'
     )
 
-    st.json(st.session_state['changed-aggrid'] if st.session_state['changed-aggrid'] is not None else '{}', expanded=False)
+# added
+if len(st.session_state['added']) > 0:
 
-if st.session_state['added'] is not None:
     added_data = DataFrame(
       data=st.session_state['added'],
       columns=columns
@@ -271,9 +237,9 @@ if st.session_state['added'] is not None:
       key='added-aggrid'
     )
 
-    st.json(st.session_state['added'] or '{}', expanded=False)
-    
-if st.session_state['deleted'] is not None:
+# deleted
+if len(st.session_state['deleted']) > 0:
+
     deleted_data = DataFrame(
       data=st.session_state['deleted'],
       columns=columns
@@ -282,7 +248,7 @@ if st.session_state['deleted'] is not None:
     gb_deleted = GridOptionsBuilder.from_dataframe(deleted_data)
     gb_deleted.configure_selection('multiple', use_checkbox=True)
     grid_options_deleted = gb_deleted.build()
-    
+
     AgGrid(
       deleted_data,
       gridOptions=grid_options_deleted,
@@ -290,4 +256,36 @@ if st.session_state['deleted'] is not None:
       key='deleted-aggrid'
     )
 
-    st.json(st.session_state['deleted'] or '{}', expanded=False)
+id_filter = []
+
+if 'changed-aggrid' in st.session_state and st.session_state['changed-aggrid'] is not None:
+    # st.json(st.session_state['changed-aggrid'], expanded=False)
+    id_filter.extend([c['element_id'] for c in st.session_state['changed-aggrid']['selectedRows']])
+
+if 'added-aggrid' in st.session_state and st.session_state['added-aggrid'] is not None:
+    # st.json(st.session_state['added-aggrid'], expanded=False)
+    id_filter.extend([c['element_id'] for c in st.session_state['added-aggrid']['selectedRows']])
+
+if 'deleted-aggrid' in st.session_state and st.session_state['deleted-aggrid'] is not None:
+    # st.json(st.session_state['deleted-aggrid'], expanded=False)
+    id_filter.extend([c['element_id'] for c in st.session_state['deleted-aggrid']['selectedRows']])
+
+
+st.write(id_filter)
+
+geometry = get_geometry(id_filter)
+recreate_vis_set(geometry)
+
+send_results(
+    'send-results',
+    results=st.session_state['vis-set'].to_dict() if st.session_state['vis-set'] is not None else '{}',
+    option='subscribe-preview',
+    options={
+        'add': False,
+        'delete': False,
+        'preview': False,
+        'clear': True,
+        'subscribe-preview': True
+    },
+    label='Preview Changes'
+)
