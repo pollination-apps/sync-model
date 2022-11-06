@@ -16,48 +16,47 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 from pollination_streamlit_io import send_results, get_hbjson, select_cloud_artifact
 
 api_client = get_api_client()
-
-st.header('Sync Model App!')
-
-if 'hbjson-a' not in st.session_state:
-    st.session_state['hbjson-a'] = None
-
-if 'hbjson-b' not in st.session_state:
-    st.session_state['hbjson-b'] = None
-
-# preview hbjson from pollination-cloud
-# if 'vtkjs-b' not in st.session_state:
-#     st.session_state['vtkjs-b'] = None
-
-if 'vis-set' not in st.session_state:
-    st.session_state['vis-set'] = None
-
-if 'changed' not in st.session_state:
-    st.session_state['changed'] = None
-
-if 'added' not in st.session_state:
-    st.session_state['added'] = None
-
-if 'deleted' not in st.session_state:
-    st.session_state['deleted'] = None
-
 project_owner = 'ladybug-tools'
 project_name = 'sync-model'
+st.header('Sync Model App!')
+
+def initialize():
+    """Initialize all of the session state variables"""
+    if 'hbjson-a' not in st.session_state:
+        st.session_state['hbjson-a'] = None
+    if 'hbjson-b' not in st.session_state:
+        st.session_state['hbjson-b'] = None
+    # preview hbjson from pollination-cloud
+    # if 'vtkjs-b' not in st.session_state:
+    #     st.session_state['vtkjs-b'] = None
+    if 'vis-set' not in st.session_state:
+        st.session_state['vis-set'] = None
+    if 'changed' not in st.session_state:
+        st.session_state['changed'] = None
+    if 'added' not in st.session_state:
+        st.session_state['added'] = None
+    if 'deleted' not in st.session_state:
+        st.session_state['deleted'] = None
+
+
+initialize()
+
 
 st.checkbox(
-  'Ignore Added',
-  value=False,
-  key='ignore-added-toggle'
+    'Ignore Added',
+    value=False,
+    key='ignore-added-toggle'
 )
 
 st.checkbox(
-  'Ignore Deleted',
-  value=False,
-  key='ignore-deleted-toggle'
+    'Ignore Deleted',
+    value=False,
+    key='ignore-deleted-toggle'
 )
 
 @st.cache
 def get_artifact_hbjson(signed_url):
+    """Get a HBJSON from Pollination platform"""
     response = requests.get(signed_url, headers=api_client.headers)
 
     if response.status_code is 200:
@@ -65,37 +64,37 @@ def get_artifact_hbjson(signed_url):
     else :
         return '{}'
 
-def generate_face_3d_from_changes(change_type, changed_objects):
+
+def generate_face_3d_from_changes(changed_objects):
+    """Get DisplayFace3D from a sub-section of the ComparisonReport"""
     faces = []
-    key = 'existing_geometry' if change_type == 'Changed' else 'geometry'
-
     for changes in changed_objects:
-        faces.extend([DisplayFace3D.from_dict(geo) for geo in changes[key]])
-
+        faces.extend([DisplayFace3D.from_dict(geo) for geo in changes['geometry']])
     return faces
 
+
 def get_geometry(change_type):
+    """Get the geometry associated with a particular change type."""
     if change_type == 'Changed' and st.session_state['changed'] is not None:
         # id_filter = st.session_state['changed-aggrid']['selectedRows'] if st.session_state['changed-aggrid'] is not None else None
         # filtered = [change in st.session_state['changed'] if change['id']]
         return generate_face_3d_from_changes(
-          change_type, 
-          changed_objects=
+          changed_objects=st.session_state['changed']
         )
     elif change_type == 'Added' and st.session_state['added'] is not None:
         return generate_face_3d_from_changes(
-          change_type, 
           changed_objects=st.session_state['added']
         )
     elif change_type == 'Deleted' and st.session_state['deleted'] is not None:
         return generate_face_3d_from_changes(
-          change_type, 
           changed_objects=st.session_state['deleted']
         )
     else:
-        return None
+        return []
+
 
 def recreate_comparison_report(model_a, model_b):
+    """Generate a ComparisonReport between two models."""
     comparison_report = model_a.comparison_report(
       model_b,
       ignore_deleted=st.session_state['ignore-deleted-toggle'],
@@ -105,8 +104,10 @@ def recreate_comparison_report(model_a, model_b):
         return
 
     st.session_state['changed'] = comparison_report['changed_objects']
-    st.session_state['added'] = comparison_report['added_objects']
-    st.session_state['deleted'] = comparison_report['deleted_objects']
+    st.session_state['added'] = comparison_report['added_objects'] \
+        if 'added_objects' in comparison_report else []
+    st.session_state['deleted'] = comparison_report['deleted_objects'] \
+        if 'deleted_objects' in comparison_report else []
 
     st.session_state['vis-set'] = VisualizationSet(
       'id',
@@ -122,6 +123,7 @@ def recreate_comparison_report(model_a, model_b):
 
 # get model_a
 def handle_get_hbjson():
+    """Get the base Model from the CAD plugin."""
     hbjson = st.session_state['get-hbjson-a']
 
     model = Model.from_dict(hbjson['hbjson'])
@@ -133,6 +135,7 @@ def handle_get_hbjson():
 # get model_b
 # Fetch the artifact contents on selection
 def handle_sel_artifact_hbjson():
+    """Get the changed HBJSON from the cloud or a file."""
     artifact = st.session_state['get-hbjson-b']
     
     if artifact is None:
@@ -168,26 +171,27 @@ get_hbjson(
             },
             "selection" : {
                 "show": True,
-                "selected": True
+                "selected": False
             }
         },
   on_change=handle_get_hbjson,
 )
 
 select_cloud_artifact(
-  'get-hbjson-b',
-  api_client,
-  project_name=project_name,
-  project_owner=project_owner,
-  study_id='',
-  file_name_match='.*hbjson',
-  on_change=handle_sel_artifact_hbjson,
+    'get-hbjson-b',
+    api_client,
+    project_name=project_name,
+    project_owner=project_owner,
+    study_id='',
+    file_name_match='.*hbjson',
+    on_change=handle_sel_artifact_hbjson
 )
 
 st.info('Compare a model from Rhino with a model from Pollination Cloud.')
 
 def handle_type_change():
     change_type = st.session_state['change-type']
+    st.write(change_type)
 
     st.session_state['vis-set'] = VisualizationSet(
       'id',
@@ -200,25 +204,25 @@ def handle_type_change():
     )
 
 st.selectbox(
-  'Change Type',
-  ['Changed', 'Added', 'Deleted'],
-  key='change-type',
-  index=0,
-  on_change=handle_type_change
+    'Change Type',
+    ['Changed', 'Added', 'Deleted'],
+    key='change-type',
+    index=0,
+    on_change=handle_type_change
 )
 
 send_results(
-  'send-results',
-  results=st.session_state['vis-set'].to_dict() if st.session_state['vis-set'] is not None else '{}',
-  option='subscribe-preview',
-  options={
-            'add': False,
-            'delete': False,
-            'preview': False,
-            'clear': True,
-            'subscribe-preview': True
-        },
-  label='Preview Changes'
+    'send-results',
+    results=st.session_state['vis-set'].to_dict() if st.session_state['vis-set'] is not None else '{}',
+    option='subscribe-preview',
+    options={
+        'add': False,
+        'delete': False,
+        'preview': False,
+        'clear': True,
+        'subscribe-preview': True
+    },
+    label='Preview Changes'
 )
 
 # if vis_set is not None:
